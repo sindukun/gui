@@ -40,10 +40,14 @@ local CheckCooldown = {}
 
 local function queryOwnership(uid, passId)
 	if passId <= 0 then return false end
-	local ok, owns = pcall(function()
-		return MarketplaceService:UserOwnsGamePassAsync(uid, passId)
-	end)
-	return ok and owns or false
+	for attempt = 1, 3 do
+		local ok, owns = pcall(function()
+			return MarketplaceService:UserOwnsGamePassAsync(uid, passId)
+		end)
+		if ok then return owns end
+		if attempt < 3 then task.wait(1) end
+	end
+	return nil
 end
 
 function GM.LoadAll(player)
@@ -55,7 +59,19 @@ function GM.LoadAll(player)
 
 	for _, pass in ipairs(GamepassConfig.Passes) do
 		task.spawn(function()
-			Cache[uid][pass.Name] = queryOwnership(uid, pass.GamepassId)
+			local result = queryOwnership(uid, pass.GamepassId)
+			if result ~= nil then
+				Cache[uid][pass.Name] = result
+			else
+				-- nil = transient failure; keep existing value, schedule one delayed retry
+				task.delay(10, function()
+					if not Cache[uid] then return end
+					local retry = queryOwnership(uid, pass.GamepassId)
+					if retry ~= nil then
+						Cache[uid][pass.Name] = retry
+					end
+				end)
+			end
 			done += 1
 		end)
 	end
@@ -84,8 +100,11 @@ function GM.RefreshPass(player, passName)
 	if not Cache[uid] then Cache[uid] = {} end
 	local pass = GamepassConfig.ByName[passName]
 	if not pass then return false end
-	Cache[uid][passName] = queryOwnership(uid, pass.GamepassId)
-	return Cache[uid][passName]
+	local result = queryOwnership(uid, pass.GamepassId)
+	if result ~= nil then
+		Cache[uid][passName] = result
+	end
+	return Cache[uid][passName] or false
 end
 
 -----------------------------------------------
